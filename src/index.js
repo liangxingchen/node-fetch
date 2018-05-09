@@ -19,6 +19,18 @@ const { PassThrough } = require('stream');
 const { resolve: resolve_url } = require('url');
 const zlib = require('zlib');
 
+function resolveUrl(from, to){
+	if(/^unix\:/.test(from)){
+		let index = from.indexOf(':', 5);
+		if(index){
+			let unix = from.substr(0, index + 1);
+			let path = from.substr(index + 1);
+			return unix + resolve_url(path, to);
+		}
+	}
+	return resolve_url(from, to);
+}
+
 /**
  * Fetch function
  *
@@ -77,7 +89,7 @@ export default function fetch(url, opts) {
 				const location = headers.get('Location');
 
 				// HTTP fetch step 5.3
-				const locationURL = location === null ? null : resolve_url(request.url, location);
+				const locationURL = location === null ? null : resolveUrl(request.url, location);
 
 				// HTTP fetch step 5.5
 				switch (request.redirect) {

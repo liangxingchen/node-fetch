@@ -47,7 +47,8 @@ const supportToString = ({
 }).toString() === '[object z]';
 
 const local = new TestServer();
-const base = `http://${local.hostname}:${local.port}/`;
+local.port = '/tmp/node-fetch-unix.sock';
+const base = `unix:/tmp/node-fetch-unix.sock:/`;
 
 before(done => {
 	local.start(done);
@@ -1452,18 +1453,6 @@ describe('node-fetch', () => {
 		expect(err.errno).to.equal('ESOMEERROR');
 		expect(err.stack).to.include('funcName')
 			.and.to.startWith(`${err.name}: ${err.message}`);
-	});
-
-	it('should support https request', function() {
-		this.timeout(5000);
-		const url = 'https://git.io/';
-		const opts = {
-			method: 'HEAD'
-		};
-		return fetch(url, opts).then(res => {
-			expect(res.status).to.equal(200);
-			expect(res.ok).to.be.true;
-		});
 	});
 
 	// issue #414

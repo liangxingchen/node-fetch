@@ -1,6 +1,6 @@
 {
-  "name": "node-fetch",
-  "version": "2.1.2",
+  "name": "node-fetch-unix",
+  "version": "2.1.2-rc.1",
   "description": "A light-weight module that brings window.fetch to node.js",
   "main": "lib/index.js",
   "browser": "./browser.js",
@@ -17,12 +17,13 @@
     "build": "cross-env BABEL_ENV=rollup rollup -c",
     "prepare": "npm run build",
     "test": "cross-env BABEL_ENV=test mocha --compilers js:babel-register test/test.js",
+    "test-unix": "cross-env BABEL_ENV=test mocha --compilers js:babel-register test/test-unix.js",
     "report": "cross-env BABEL_ENV=coverage nyc --reporter lcov --reporter text mocha -R spec test/test.js",
     "coverage": "cross-env BABEL_ENV=coverage nyc --reporter json --reporter text mocha -R spec test/test.js && codecov -f coverage/coverage-final.json"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/bitinn/node-fetch.git"
+    "url": "https://github.com/liangxingchen/node-fetch-unix.git"
   },
   "keywords": [
     "fetch",
@@ -32,9 +33,9 @@
   "author": "David Frank",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/bitinn/node-fetch/issues"
+    "url": "https://github.com/liangxingchen/node-fetch-unix/issues"
   },
-  "homepage": "https://github.com/bitinn/node-fetch",
+  "homepage": "https://github.com/liangxingchen/node-fetch-unix",
   "devDependencies": {
     "babel-core": "^6.26.0",
     "babel-plugin-istanbul": "^4.1.5",

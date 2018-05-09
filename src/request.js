@@ -27,6 +27,18 @@ function isRequest(input) {
 	);
 }
 
+function formatUrl(parsedURL){
+	if(parsedURL.socketPath){
+		let data = Object.assign({}, parsedURL);
+		delete data.socketPath;
+		data.protocol = 'unix:';
+		data.path = parsedURL.socketPath + ':' + parsedURL.path;
+		data.pathname = data.path;
+		return format_url(data);
+	}
+	return format_url(parsedURL);
+}
+
 /**
  * Request class
  *
@@ -52,6 +64,14 @@ export default class Request {
 			input = {};
 		} else {
 			parsedURL = parse_url(input.url);
+		}
+		
+		if(parsedURL.protocol === 'unix:'){
+			let index = parsedURL.path.indexOf(':');
+			parsedURL.socketPath = parsedURL.path.substr(0, index);
+			parsedURL.path = parsedURL.path.substr(index+1);
+			parsedURL.pathname = parsedURL.path;
+			parsedURL.protocol = 'http:'
 		}
 
 		let method = init.method || input.method || 'GET';
@@ -105,7 +125,7 @@ export default class Request {
 	}
 
 	get url() {
-		return format_url(this[INTERNALS].parsedURL);
+		return formatUrl(this[INTERNALS].parsedURL);
 	}
 
 	get headers() {
@@ -159,7 +179,7 @@ export function getNodeRequestOptions(request) {
 	}
 
 	// Basic fetch
-	if (!parsedURL.protocol || !parsedURL.hostname) {
+	if (!parsedURL.protocol || (!parsedURL.hostname && !parsedURL.socketPath)) {
 		throw new TypeError('Only absolute URLs are supported');
 	}
 
