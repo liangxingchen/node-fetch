@@ -33,7 +33,7 @@ function formatUrl(parsedURL){
 		delete data.socketPath;
 		data.protocol = 'unix:';
 		data.path = parsedURL.socketPath + ':' + parsedURL.path;
-		data.pathname = data.path;
+		data.pathname = parsedURL.socketPath + ':' + parsedURL.pathname;
 		return format_url(data);
 	}
 	return format_url(parsedURL);
@@ -69,8 +69,13 @@ export default class Request {
 		if(parsedURL.protocol === 'unix:'){
 			let index = parsedURL.path.indexOf(':');
 			parsedURL.socketPath = parsedURL.path.substr(0, index);
-			parsedURL.path = parsedURL.path.substr(index+1);
-			parsedURL.pathname = parsedURL.path;
+			parsedURL.path = parsedURL.path.substr(index + 1);
+			let queryIndex = parsedURL.path.indexOf('?');
+			if(queryIndex > -1){
+				parsedURL.pathname = parsedURL.path.substr(0, queryIndex);
+			} else {
+				parsedURL.pathname = parsedURL.path;
+			}
 			parsedURL.protocol = 'http:'
 		}
 
