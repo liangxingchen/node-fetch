@@ -5,16 +5,18 @@
  * Body interface provides common methods for Request and Response
  */
 
+import Stream from 'stream';
+
 import Blob, { BUFFER } from './blob.js';
 import FetchError from './fetch-error.js';
-
-const Stream = require('stream');
-const { PassThrough } = require('stream');
 
 let convert;
 try { convert = require('encoding').convert; } catch(e) {}
 
 const INTERNALS = Symbol('Body internals');
+
+// fix an issue where "PassThrough" isn't a named export for node <10
+const PassThrough = Stream.PassThrough;
 
 /**
  * Body mixin
@@ -32,22 +34,26 @@ export default function Body(body, {
 	if (body == null) {
 		// body is undefined or null
 		body = null;
-	} else if (typeof body === 'string') {
-		// body is string
 	} else if (isURLSearchParams(body)) {
 		// body is a URLSearchParams
+		body = Buffer.from(body.toString());
 	} else if (body instanceof Blob) {
 		// body is blob
+		body = body[BUFFER];
 	} else if (Buffer.isBuffer(body)) {
-		// body is buffer
+		// body is Buffer
 	} else if (Object.prototype.toString.call(body) === '[object ArrayBuffer]') {
-		// body is array buffer
+		// body is ArrayBuffer
+		body = Buffer.from(body);
+	} else if (ArrayBuffer.isView(body)) {
+		// body is ArrayBufferView
+		body = Buffer.from(body.buffer, body.byteOffset, body.byteLength);
 	} else if (body instanceof Stream) {
 		// body is stream
 	} else {
 		// none of the above
-		// coerce to string
-		body = String(body);
+		// coerce to string then buffer
+		body = Buffer.from(String(body));
 	}
 	this[INTERNALS] = {
 		body,
@@ -59,7 +65,10 @@ export default function Body(body, {
 
 	if (body instanceof Stream) {
 		body.on('error', err => {
-			this[INTERNALS].error = new FetchError(`Invalid response body while trying to fetch ${this.url}: ${err.message}`, 'system', err);
+			const error = err.name === 'AbortError'
+				? err
+				: new FetchError(`Invalid response body while trying to fetch ${this.url}: ${err.message}`, 'system', err);
+			this[INTERNALS].error = error;
 		});
 	}
 }
@@ -141,9 +150,7 @@ Body.prototype = {
 	 */
 	textConverted() {
 		return consumeBody.call(this).then(buffer => convertBody(buffer, this.headers));
-	},
-
-
+	}
 };
 
 // In browsers, all properties are enumerable.
@@ -189,24 +196,9 @@ function consumeBody() {
 		return Body.Promise.resolve(Buffer.alloc(0));
 	}
 
-	// body is string
-	if (typeof this.body === 'string') {
-		return Body.Promise.resolve(Buffer.from(this.body));
-	}
-
-	// body is blob
-	if (this.body instanceof Blob) {
-		return Body.Promise.resolve(this.body[BUFFER]);
-	}
-
 	// body is buffer
 	if (Buffer.isBuffer(this.body)) {
 		return Body.Promise.resolve(this.body);
-	}
-
-	// body is buffer
-	if (Object.prototype.toString.call(this.body) === '[object ArrayBuffer]') {
-		return Body.Promise.resolve(Buffer.from(this.body));
 	}
 
 	// istanbul ignore if: should never happen
@@ -231,9 +223,16 @@ function consumeBody() {
 			}, this.timeout);
 		}
 
-		// handle stream error, such as incorrect content-encoding
+		// handle stream errors
 		this.body.on('error', err => {
-			reject(new FetchError(`Invalid response body while trying to fetch ${this.url}: ${err.message}`, 'system', err));
+			if (err.name === 'AbortError') {
+				// if the request was aborted, reject with this Error
+				abort = true;
+				reject(err);
+			} else {
+				// other errors, such as incorrect content-encoding
+				reject(new FetchError(`Invalid response body while trying to fetch ${this.url}: ${err.message}`, 'system', err));
+			}
 		});
 
 		this.body.on('data', chunk => {
@@ -396,9 +395,7 @@ export function clone(instance) {
  *
  * @param   Mixed  instance  Response or Request instance
  */
-export function extractContentType(instance) {
-	const {body} = instance;
-
+export function extractContentType(body) {
 	// istanbul ignore if: Currently, because of a guard in Request, body
 	// can never be null. Included here for completeness.
 	if (body === null) {
@@ -408,7 +405,7 @@ export function extractContentType(instance) {
 		// body is string
 		return 'text/plain;charset=UTF-8';
 	} else if (isURLSearchParams(body)) {
-	 	// body is a URLSearchParams
+		// body is a URLSearchParams
 		return 'application/x-www-form-urlencoded;charset=UTF-8';
 	} else if (body instanceof Blob) {
 		// body is blob
@@ -417,15 +414,21 @@ export function extractContentType(instance) {
 		// body is buffer
 		return null;
 	} else if (Object.prototype.toString.call(body) === '[object ArrayBuffer]') {
-		// body is array buffer
+		// body is ArrayBuffer
+		return null;
+	} else if (ArrayBuffer.isView(body)) {
+		// body is ArrayBufferView
 		return null;
 	} else if (typeof body.getBoundary === 'function') {
 		// detect form data input from form-data module
 		return `multipart/form-data;boundary=${body.getBoundary()}`;
-	} else {
+	} else if (body instanceof Stream) {
 		// body is stream
 		// can't really do much about this
 		return null;
+	} else {
+		// Body constructor defaults other things to string
+		return 'text/plain;charset=UTF-8';
 	}
 }
 
@@ -445,21 +448,9 @@ export function getTotalBytes(instance) {
 	if (body === null) {
 		// body is null
 		return 0;
-	} else if (typeof body === 'string') {
-		// body is string
-		return Buffer.byteLength(body);
-	} else if (isURLSearchParams(body)) {
-		// body is URLSearchParams
-		return Buffer.byteLength(String(body));
-	} else if (body instanceof Blob) {
-		// body is blob
-		return body.size;
 	} else if (Buffer.isBuffer(body)) {
 		// body is buffer
 		return body.length;
-	} else if (Object.prototype.toString.call(body) === '[object ArrayBuffer]') {
-		// body is array buffer
-		return body.byteLength;
 	} else if (body && typeof body.getLengthSync === 'function') {
 		// detect form data input from form-data module
 		if (body._lengthRetrievers && body._lengthRetrievers.length == 0 || // 1.x
@@ -486,25 +477,9 @@ export function writeToStream(dest, instance) {
 	if (body === null) {
 		// body is null
 		dest.end();
-	} else if (typeof body === 'string') {
-		// body is string
-		dest.write(body);
-		dest.end();
-	} else if (isURLSearchParams(body)) {
-		// body is URLSearchParams
-		dest.write(Buffer.from(String(body)));
-		dest.end();
-	} else if (body instanceof Blob) {
-		// body is blob
-		dest.write(body[BUFFER]);
-		dest.end();
 	} else if (Buffer.isBuffer(body)) {
 		// body is buffer
 		dest.write(body);
-		dest.end()
-	} else if (Object.prototype.toString.call(body) === '[object ArrayBuffer]') {
-		// body is array buffer
-		dest.write(Buffer.from(body));
 		dest.end()
 	} else {
 		// body is stream

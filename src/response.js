@@ -5,12 +5,15 @@
  * Response class provides content decoding
  */
 
-import Headers from './headers.js';
-import Body, { clone } from './body';
+import http from 'http';
 
-const { STATUS_CODES } = require('http');
+import Headers from './headers.js';
+import Body, { clone, extractContentType } from './body';
 
 const INTERNALS = Symbol('Response internals');
+
+// fix an issue where "STATUS_CODES" aren't a named export for node <10
+const STATUS_CODES = http.STATUS_CODES;
 
 /**
  * Response class
@@ -24,12 +27,20 @@ export default class Response {
 		Body.call(this, body, opts);
 
 		const status = opts.status || 200;
+		const headers = new Headers(opts.headers)
+
+		if (body != null && !headers.has('Content-Type')) {
+			const contentType = extractContentType(body);
+			if (contentType) {
+				headers.append('Content-Type', contentType);
+			}
+		}
 
 		this[INTERNALS] = {
 			url: opts.url,
 			status,
 			statusText: opts.statusText || STATUS_CODES[status],
-			headers: new Headers(opts.headers)
+			headers
 		};
 	}
 

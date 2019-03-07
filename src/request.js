@@ -7,12 +7,18 @@
  * All spec algorithm step numbers are based on https://fetch.spec.whatwg.org/commit-snapshots/ae716822cb3a61843226cd090eefc6589446c1d2/.
  */
 
+import Url from 'url';
+import Stream from 'stream';
 import Headers, { exportNodeCompatibleHeaders } from './headers.js';
 import Body, { clone, extractContentType, getTotalBytes } from './body';
 
-const { format: format_url, parse: parse_url } = require('url');
-
 const INTERNALS = Symbol('Request internals');
+
+// fix an issue where "format", "parse" aren't a named export for node <10
+const parse_url = Url.parse;
+const format_url = Url.format;
+
+const streamDestructionSupported = 'destroy' in Stream.Readable.prototype;
 
 /**
  * Check if a value is an instance of Request.
@@ -37,6 +43,15 @@ function formatUrl(parsedURL){
 		return format_url(data);
 	}
 	return format_url(parsedURL);
+}
+
+function isAbortSignal(signal) {
+	const proto = (
+		signal
+		&& typeof signal === 'object'
+		&& Object.getPrototypeOf(signal)
+	);
+	return !!(proto && proto.constructor.name === 'AbortSignal');
 }
 
 /**
@@ -100,18 +115,28 @@ export default class Request {
 
 		const headers = new Headers(init.headers || input.headers || {});
 
-		if (init.body != null) {
-			const contentType = extractContentType(this);
-			if (contentType !== null && !headers.has('Content-Type')) {
+		if (inputBody != null && !headers.has('Content-Type')) {
+			const contentType = extractContentType(inputBody);
+			if (contentType) {
 				headers.append('Content-Type', contentType);
 			}
+		}
+
+		let signal = isRequest(input)
+			? input.signal
+			: null;
+		if ('signal' in init) signal = init.signal
+
+		if (signal != null && !isAbortSignal(signal)) {
+			throw new TypeError('Expected signal to be an instanceof AbortSignal');
 		}
 
 		this[INTERNALS] = {
 			method,
 			redirect: init.redirect || input.redirect || 'follow',
 			headers,
-			parsedURL
+			parsedURL,
+			signal,
 		};
 
 		// node-fetch-only options
@@ -141,6 +166,10 @@ export default class Request {
 		return this[INTERNALS].redirect;
 	}
 
+	get signal() {
+		return this[INTERNALS].signal;
+	}
+
 	/**
 	 * Clone this request
 	 *
@@ -165,7 +194,8 @@ Object.defineProperties(Request.prototype, {
 	url: { enumerable: true },
 	headers: { enumerable: true },
 	redirect: { enumerable: true },
-	clone: { enumerable: true }
+	clone: { enumerable: true },
+	signal: { enumerable: true },
 });
 
 /**
@@ -192,6 +222,14 @@ export function getNodeRequestOptions(request) {
 		throw new TypeError('Only HTTP(S) protocols are supported');
 	}
 
+	if (
+		request.signal
+		&& request.body instanceof Stream.Readable
+		&& !streamDestructionSupported
+	) {
+		throw new Error('Cancellation of streamed requests with AbortSignal is not supported in node < 8');
+	}
+
 	// HTTP-network-or-cache fetch steps 2.4-2.7
 	let contentLengthValue = null;
 	if (request.body == null && /^(POST|PUT)$/i.test(request.method)) {
@@ -213,9 +251,10 @@ export function getNodeRequestOptions(request) {
 	}
 
 	// HTTP-network-or-cache fetch step 2.15
-	if (request.compress) {
+	if (request.compress && !headers.has('Accept-Encoding')) {
 		headers.set('Accept-Encoding', 'gzip,deflate');
 	}
+
 	if (!headers.has('Connection') && !request.agent) {
 		headers.set('Connection', 'close');
 	}

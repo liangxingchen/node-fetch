@@ -7,17 +7,22 @@
  * All spec algorithm step numbers are based on https://fetch.spec.whatwg.org/commit-snapshots/ae716822cb3a61843226cd090eefc6589446c1d2/.
  */
 
+import Url from 'url';
+import http from 'http';
+import https from 'https';
+import zlib from 'zlib';
+import Stream from 'stream';
+
 import Body, { writeToStream, getTotalBytes } from './body';
 import Response from './response';
 import Headers, { createHeadersLenient } from './headers';
 import Request, { getNodeRequestOptions } from './request';
 import FetchError from './fetch-error';
+import AbortError from './abort-error';
 
-const http = require('http');
-const https = require('https');
-const { PassThrough } = require('stream');
-const { resolve: resolve_url } = require('url');
-const zlib = require('zlib');
+// fix an issue where "PassThrough", "resolve" aren't a named export for node <10
+const PassThrough = Stream.PassThrough;
+const resolve_url = Url.resolve;
 
 function resolveUrl(from, to){
 	if(/^unix\:/.test(from)){
@@ -54,13 +59,40 @@ export default function fetch(url, opts) {
 		const options = getNodeRequestOptions(request);
 
 		const send = (options.protocol === 'https:' ? https : http).request;
+		const { signal } = request;
+		let response = null;
+
+		const abort = ()  => {
+			let error = new AbortError('The user aborted a request.');
+			reject(error);
+			if (request.body && request.body instanceof Stream.Readable) {
+				request.body.destroy(error);
+			}
+			if (!response || !response.body) return;
+			response.body.emit('error', error);
+		}
+
+		if (signal && signal.aborted) {
+			abort();
+			return;
+		}
+
+		const abortAndFinalize = () => {
+			abort();
+			finalize();
+		}
 
 		// send request
 		const req = send(options);
 		let reqTimeout;
 
+		if (signal) {
+			signal.addEventListener('abort', abortAndFinalize);
+		}
+
 		function finalize() {
 			req.abort();
+			if (signal) signal.removeEventListener('abort', abortAndFinalize);
 			clearTimeout(reqTimeout);
 		}
 
@@ -100,7 +132,13 @@ export default function fetch(url, opts) {
 					case 'manual':
 						// node-fetch-specific step: make manual redirect a bit easier to use by setting the Location header value to the resolved URL.
 						if (locationURL !== null) {
-							headers.set('Location', locationURL);
+							// handle corrupted header
+							try {
+								headers.set('Location', locationURL);
+							} catch (err) {
+								// istanbul ignore next: nodejs server prevent invalid response headers, we can't test this through normal request
+								reject(err);
+							}
 						}
 						break;
 					case 'follow':
@@ -125,7 +163,8 @@ export default function fetch(url, opts) {
 							agent: request.agent,
 							compress: request.compress,
 							method: request.method,
-							body: request.body
+							body: request.body,
+							signal: request.signal,
 						};
 
 						// HTTP-redirect fetch step 9
@@ -150,7 +189,11 @@ export default function fetch(url, opts) {
 			}
 
 			// prepare response
+			res.once('end', () => {
+				if (signal) signal.removeEventListener('abort', abortAndFinalize);
+			});
 			let body = res.pipe(new PassThrough());
+
 			const response_options = {
 				url: request.url,
 				status: res.statusCode,
@@ -172,7 +215,8 @@ export default function fetch(url, opts) {
 			// 4. no content response (204)
 			// 5. content not modified response (304)
 			if (!request.compress || request.method === 'HEAD' || codings === null || res.statusCode === 204 || res.statusCode === 304) {
-				resolve(new Response(body, response_options));
+				response = new Response(body, response_options);
+				resolve(response);
 				return;
 			}
 
@@ -189,7 +233,8 @@ export default function fetch(url, opts) {
 			// for gzip
 			if (codings == 'gzip' || codings == 'x-gzip') {
 				body = body.pipe(zlib.createGunzip(zlibOptions));
-				resolve(new Response(body, response_options));
+				response = new Response(body, response_options);
+				resolve(response);
 				return;
 			}
 
@@ -205,13 +250,15 @@ export default function fetch(url, opts) {
 					} else {
 						body = body.pipe(zlib.createInflateRaw());
 					}
-					resolve(new Response(body, response_options));
+					response = new Response(body, response_options);
+					resolve(response);
 				});
 				return;
 			}
 
 			// otherwise, use response as-is
-			resolve(new Response(body, response_options));
+			response = new Response(body, response_options);
+			resolve(response);
 		});
 
 		writeToStream(req, request);
@@ -226,9 +273,6 @@ export default function fetch(url, opts) {
  * @return  Boolean
  */
 fetch.isRedirect = code => code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
-
-// Needed for TypeScript.
-fetch.default = fetch;
 
 // expose Promise
 fetch.Promise = global.Promise;
